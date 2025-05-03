@@ -3,6 +3,7 @@ import asyncio
 import signal
 import sys
 import struct
+import wenet_ble_udp as udp
 
 import bleak
 from bleak import BleakClient, BleakScanner, uuids
@@ -16,6 +17,7 @@ service_uuids = [WENET_SERVICE_UUID]
 
 WENET_SENSOR_CHAR = "3d235f0e-61f8-4455-89c6-2f7d73c33178"
 
+wenet_message_queue = asyncio.Queue(50)
 device_queue = asyncio.Queue(50)
 scanner_event = asyncio.Event()
 
@@ -27,7 +29,8 @@ last_value = 0
 def notification_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
     """Simple notification handler which prints the data received."""
     global last_value
-    sequence_num = struct.unpack('<ch4s', data)[1] 
+    sequence_num = struct.unpack('<ch4s', data)[1]
+    wenet_message_queue.put_nowait(data)
     if(last_value == 0):
        last_value = sequence_num
     else:
@@ -59,6 +62,7 @@ async def connect_device():
     while True:
         event.clear()
         device = await device_queue.get()
+        await asyncio.sleep(1)
         print(f"Connecting to {device}")
         try:
             async with BleakClient(device, timeout=10, disconnected_callback=disconnected) as client:
@@ -79,6 +83,7 @@ async def main(args: argparse.Namespace):
     tasks.append(asyncio.create_task(connect_device()))
     tasks.append(asyncio.create_task(connect_device()))
     tasks.append(asyncio.create_task(connect_device()))
+    tasks.append(asyncio.create_task(udp.run_client(wenet_message_queue, 8888)))
     await asyncio.gather(*(tasks))
 
 if __name__ == "__main__":
