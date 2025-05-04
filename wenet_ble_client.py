@@ -25,8 +25,7 @@ device_queue = asyncio.Queue(50)
 # Event to signal when the scanner has found a device
 scanner_event = asyncio.Event()
 
-def build_wenet_single_packet(data: bytearray):
-    # Total size: 23 bytes
+def process_single_packet(data: bytearray):
     header = data[0:3]
     payload = data[3:].ljust(16, b'\xff')
     cur_time = datetime.datetime.now(datetime.timezone.utc)
@@ -46,11 +45,13 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 last_value = 0
-def notification_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
-    """Simple notification handler which prints the data received."""
+def notify_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
+    """Callback for when a notification is received."""
     global last_value
     sequence_num = struct.unpack('<BH4s', data)[1]
-    packet_queue.put_nowait(build_wenet_single_packet(data))
+    packet_queue.put_nowait(process_single_packet(data))
+
+    # Debug info
     if(last_value == 0):
        last_value = sequence_num
     else:
@@ -87,7 +88,7 @@ async def connect_device():
         try:
             async with BleakClient(device, timeout=10, disconnected_callback=disconnected) as client:
                 print("Connected")
-                await client.start_notify(WENET_SENSOR_CHAR, notification_handler)
+                await client.start_notify(WENET_SENSOR_CHAR, notify_handler)
                 scanner_event.set()
                 await event.wait()
         except(TimeoutError):
