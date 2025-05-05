@@ -44,20 +44,11 @@ def signal_handler(sig, frame):
     print('Got CTRL-C, cleaning up and shutting down...')
     sys.exit(0)
 
-last_value = 0
 def notify_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
     """Callback for when a notification is received."""
-    global last_value
-    sequence_num = struct.unpack('<BH4s', data)[1]
     packet_queue.put_nowait(process_single_packet(data))
 
     # Debug info
-    if(last_value == 0):
-       last_value = sequence_num
-    else:
-        if(sequence_num != (last_value + 1)):
-            print("Sequence error")
-        last_value = sequence_num
     # print(decode_packet(data))
 
 async def scanner():
