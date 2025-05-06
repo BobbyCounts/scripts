@@ -51,43 +51,55 @@ def notify_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
     # Debug info
     # print(decode_packet(data))
 
-async def scanner():
+async def scanner(connection_cnt):
     while True:
         async with BleakScanner() as scanner:
+            await connection_cnt.acquire()
             print("Scanner started...")
-            async for (device, adv_data) in scanner.advertisement_data():
-                scanner_event.clear()
-                if(adv_data.rssi < -100):
-                    continue
-                if(WENET_SERVICE_UUID in adv_data.service_uuids):
-                    print(f"Found {device}, rssi: {adv_data.rssi}")
-                    device_queue.put_nowait(device)
-                    break
-        print("Scanner stopped")
+            try:
+                async for (device, adv_data) in scanner.advertisement_data():
+                    scanner_event.clear()
+                    if(adv_data.rssi < -100):
+                        continue
+                    if(WENET_SERVICE_UUID in adv_data.service_uuids):
+                        print(f"Found {device}, rssi: {adv_data.rssi}")
+                        device_queue.put_nowait(device)
+                        break
+            finally:
+                print("Scanner stopped")
+                connection_cnt.release()
         await scanner_event.wait()
 
-async def connect_device():
+async def connect_device(connection_cnt):
     event = asyncio.Event()
     def disconnected(client):
-        print(f"Disconnected {client}")
         event.set()
     while True:
         event.clear()
         device = await device_queue.get()
-        await asyncio.sleep(1)
-        print(f"Connecting to {device}")
         try:
+            print(f"Connecting to {device}")
+            await connection_cnt.acquire()
             async with BleakClient(device, timeout=10, disconnected_callback=disconnected) as client:
-                print("Connected")
+                print(f"Connected to {device}")
                 await client.start_notify(WENET_SENSOR_CHAR, notify_handler)
                 scanner_event.set()
-                await event.wait()
+                while True:
+                    await event.wait()
+                    # Debug
+                    if(client.is_connected):
+                        event.clear()
+                        print("DEBUG: Still connected")
+                    else:
+                        break
         except(TimeoutError):
             print("Timed out connecting")
         except(bleak.exc.BleakError):
             print("Bleak error")
         finally:
             scanner_event.set()
+            connection_cnt.release()
+            print(f"Disconnected from {device}")
 
 async def process_json(timeout):
     while True:
@@ -117,18 +129,19 @@ async def process_json(timeout):
         json_queue.put_nowait(json_frame.encode())
         
 async def main(args: argparse.Namespace):
+    connection_cnt = asyncio.Semaphore(args.device_count)
     tasks = []
-    tasks.append(asyncio.create_task(scanner()))
-    tasks.append(asyncio.create_task(connect_device()))
-    tasks.append(asyncio.create_task(connect_device()))
-    tasks.append(asyncio.create_task(connect_device()))
-    tasks.append(asyncio.create_task(process_json(5)))
+    for i in range(args.device_count):
+        tasks.append(asyncio.create_task(connect_device(connection_cnt)))
+    tasks.append(asyncio.create_task(scanner(connection_cnt)))
+    tasks.append(asyncio.create_task(process_json(args.timeout)))
     tasks.append(asyncio.create_task(udp.run_client(json_queue, 8888)))
     await asyncio.gather(*(tasks))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
+    parser.add_argument('device_count', type=int, help='Number of devices to connect to')
+    parser.add_argument('--timeout', type=int, default=10, help='Timeout for processing packets')
     args = parser.parse_args()
     signal.signal(signal.SIGINT, signal_handler)
     asyncio.run(main(args))
