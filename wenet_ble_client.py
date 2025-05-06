@@ -69,6 +69,7 @@ async def scanner(connection_cnt):
                 print("Scanner stopped")
                 connection_cnt.release()
         await scanner_event.wait()
+        await asyncio.sleep(1)
 
 async def connect_device(connection_cnt):
     event = asyncio.Event()
