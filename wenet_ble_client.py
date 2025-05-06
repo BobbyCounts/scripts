@@ -88,8 +88,9 @@ async def connect_device(connection_cnt):
                     await event.wait()
                     # Debug
                     if(client.is_connected):
+                        # Sometimes, the device disconnects but immediately reconnects
+                        # Keep the connection alive in this case
                         event.clear()
-                        print("DEBUG: Still connected")
                     else:
                         break
         except(TimeoutError):
