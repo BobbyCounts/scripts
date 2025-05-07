@@ -22,8 +22,8 @@ packet_queue = asyncio.Queue(50)
 json_queue = asyncio.Queue(50)
 # Queue for devices found by the scanner
 device_queue = asyncio.Queue(50)
-# Event to signal when the scanner has found a device
-scanner_event = asyncio.Event()
+# Lock for when a connection is being made
+connection_lock = asyncio.Lock()
 
 def process_single_packet(data: bytearray):
     header = data[0:3]
@@ -53,12 +53,14 @@ def notify_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
 
 async def scanner(connection_cnt):
     while True:
+        # Lock connecting while scanning
+        await connection_lock.acquire()
         async with BleakScanner() as scanner:
+            # Acquire a new connection
             await connection_cnt.acquire()
             print("Scanner started...")
             try:
                 async for (device, adv_data) in scanner.advertisement_data():
-                    scanner_event.clear()
                     if(adv_data.rssi < -100):
                         continue
                     if(WENET_SERVICE_UUID in adv_data.service_uuids):
@@ -67,8 +69,10 @@ async def scanner(connection_cnt):
                         break
             finally:
                 print("Scanner stopped")
+                # Scanning is done, release lock to allow connections
                 connection_cnt.release()
-        await scanner_event.wait()
+                connection_lock.release()
+        # Wait to reaquire the lock
         await asyncio.sleep(1)
 
 async def connect_device(connection_cnt):
@@ -81,11 +85,12 @@ async def connect_device(connection_cnt):
         try:
             print(f"Connecting to {device}")
             await connection_cnt.acquire()
+            await connection_lock.acquire()
             async with BleakClient(device, timeout=10, disconnected_callback=disconnected) as client:
                 print(f"Connected to {device}")
                 await client.start_notify(WENET_SENSOR_CHAR, notify_handler)
-                scanner_event.set()
                 while True:
+                    connection_lock.release()
                     await event.wait()
                     # Debug
                     if(client.is_connected):
@@ -94,12 +99,10 @@ async def connect_device(connection_cnt):
                         event.clear()
                     else:
                         break
-        except(TimeoutError):
-            print("Timed out connecting")
-        except(bleak.exc.BleakError):
-            print("Bleak error")
+        except(TimeoutError, bleak.exc.BleakError):
+            print("Error connecting to device")
+            connection_lock.release()
         finally:
-            scanner_event.set()
             connection_cnt.release()
             print(f"Disconnected from {device}")
 
